@@ -11,16 +11,9 @@ import random
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Initialize models
+# Initialize model
 sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(device)
 sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
-slimsam_model = SamModel.from_pretrained("nielsr/slimsam-50-uniform").to(device)
-slimsam_processor = SamProcessor.from_pretrained("nielsr/slimsam-50-uniform")
-
-def get_processor_and_model(slim: bool):
-    if slim:
-        return slimsam_processor, slimsam_model
-    return sam_processor, sam_model
 
 def generate_color_pair():
     # Generate a random hue
@@ -67,28 +60,26 @@ def create_mask_overlay(image, mask):
     
     return result
 
-def process_image(image, x, y, *, slim=False):
-    processor, model = get_processor_and_model(slim)
-    
+def process_image(image, x, y):
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
-    inputs = processor(
+    inputs = sam_processor(
         image,
         input_points=[[[x, y]]],
         return_tensors="pt"
     ).to(device)
 
     with torch.no_grad():
-        outputs = model(**inputs)
+        outputs = sam_model(**inputs)
 
-    mask = processor.post_process_masks(
+    mask = sam_processor.post_process_masks(
         outputs.pred_masks.cpu(),
         inputs["original_sizes"].cpu(),
         inputs["reshaped_input_sizes"].cpu()
     )[0][0][0].numpy()
     
-    # Use the new visualization function
+    # Use the visualization function
     result = create_mask_overlay(image, mask)
     return result.convert('RGB')  # Convert back to RGB for web display
 
@@ -101,19 +92,18 @@ def segment_image(image, x_coord, y_coord):
         x = int(x_coord)
         y = int(y_coord)
         
-        # Process with both models
-        slim_result = process_image(image, x, y, slim=True)
-        sam_result = process_image(image, x, y, slim=False)
+        # Process with SAM model
+        result = process_image(image, x, y)
         
-        return [slim_result, sam_result]
+        return result
     except ValueError:
         raise gr.Error("Please enter valid numbers for coordinates")
     except Exception as e:
         raise gr.Error(f"Error processing image: {str(e)}")
 
 # Create the Gradio interface
-with gr.Blocks(title="Simple SAM Demo") as demo:
-    gr.Markdown("# Simple Segment Anything Demo")
+with gr.Blocks(title="SAM Demo") as demo:
+    gr.Markdown("# Segment Anything Demo")
     gr.Markdown("Upload an image and enter coordinates to segment an object at that location.")
     
     with gr.Row():
@@ -129,21 +119,15 @@ with gr.Blocks(title="Simple SAM Demo") as demo:
             segment_btn = gr.Button("Segment Object")
         
         with gr.Column():
-            with gr.Row():
-                slim_output = gr.Image(
-                    label="SlimSAM Output (Faster)",
-                    height=400
-                )
-            with gr.Row():
-                sam_output = gr.Image(
-                    label="SAM Output (More Accurate)",
-                    height=400
-                )
+            output_image = gr.Image(
+                label="SAM Output",
+                height=512
+            )
     
     segment_btn.click(
         fn=segment_image,
         inputs=[input_image, x_input, y_input],
-        outputs=[slim_output, sam_output]
+        outputs=output_image
     )
 
 if __name__ == "__main__":
@@ -151,4 +135,4 @@ if __name__ == "__main__":
         server_name="0.0.0.0",  # Allow external access
         server_port=7860,       # Standard Gradio port
         share=True             # Create a public link
-    )
+    ) 
